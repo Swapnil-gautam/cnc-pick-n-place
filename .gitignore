@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+# USD assets authored at startup by fanuc_cell/assets.py and geometry.py
+fanuc_cell/generated/
