@@ -25,7 +25,7 @@ class PlankSpec:
     thickness: float
     pos: tuple[float, float, float]  # center
     yaw: float
-    tint: tuple[float, float, float] = (0.78, 0.60, 0.38)
+    tint: tuple[float, float, float] = (0.66, 0.46, 0.26)  # pine
 
 
 def _static(size, color, rough=0.6) -> sim_utils.CuboidCfg:
@@ -106,10 +106,10 @@ class CellSceneCfg(InteractiveSceneCfg):
     """Static cell. Planks are added per run with add_planks()."""
 
     ground = AssetBaseCfg(prim_path="/World/ground", spawn=sim_utils.GroundPlaneCfg())
-    light = AssetBaseCfg(prim_path="/World/light", spawn=sim_utils.DomeLightCfg(intensity=1800.0))
+    light = AssetBaseCfg(prim_path="/World/light", spawn=sim_utils.DomeLightCfg(intensity=450.0))
     sun = AssetBaseCfg(
         prim_path="/World/sun",
-        spawn=sim_utils.DistantLightCfg(intensity=1500.0, angle=1.0),
+        spawn=sim_utils.DistantLightCfg(intensity=900.0, angle=1.0),
         init_state=AssetBaseCfg.InitialStateCfg(rot=(0.2, 0.3, 0.0, 0.93)),
     )
 
@@ -127,8 +127,8 @@ class CellSceneCfg(InteractiveSceneCfg):
     staging_table = _box_asset("StagingTable", L.STAGING_TABLE, (0.30, 0.32, 0.36))
     output_table = _box_asset("OutputTable", L.OUTPUT_TABLE, (0.28, 0.45, 0.35))
 
-    cnc_body = _box_asset("CncBody", L.CNC_BODY, (0.92, 0.93, 0.95), rough=0.35)
-    spoilboard = _box_asset("CncSpoilboard", L.SPOILBOARD, (0.70, 0.60, 0.45), rough=0.9)
+    cnc_body = _box_asset("CncBody", L.CNC_BODY, (0.78, 0.80, 0.83), rough=0.35)
+    spoilboard = _box_asset("CncSpoilboard", L.SPOILBOARD, (0.42, 0.34, 0.24), rough=0.9)
     front_fence = _box_asset("CncFrontFence", L.FRONT_FENCE, (0.7, 0.72, 0.75), rough=0.3)
     side_stop = _box_asset("CncSideStop", L.SIDE_STOP, (0.7, 0.72, 0.75), rough=0.3)
     rail_left = _box_asset("CncRailLeft", L.Box((_RAIL_CX, L.RAIL_Y[0], L.BED_TOP_Z + 0.025), (_RAIL_LEN, 0.04, 0.05)),

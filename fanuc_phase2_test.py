@@ -19,9 +19,14 @@ parser.add_argument("--job", default="shelf_bracket")
 parser.add_argument("--hold", action="store_true", help="Keep simulating after the cycle (for the live viewer).")
 parser.add_argument("--no-effects", action="store_true", help="Skip groove/sawdust markers.")
 parser.add_argument("--start-delay", type=float, default=0.0, help="Sim seconds to wait before starting (viewer).")
+parser.add_argument("--record", default=None, help="Directory to write one MP4 per camera angle.")
+parser.add_argument("--record-fps", type=int, default=30)
+parser.add_argument("--stop-after", type=float, default=None, help="End after this many sim seconds (previews).")
 AppLauncher.add_app_launcher_args(parser)
 parser.set_defaults(device="cpu")  # Isaac Lab's surface gripper is CPU-only
 args_cli = parser.parse_args()
+if args_cli.record:
+    args_cli.enable_cameras = True
 simulation_app = AppLauncher(args_cli).app
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -50,6 +55,13 @@ PLANK = PlankSpec("Plank0", round(JOB.blank_length + 0.04, 3), round(JOB.blank_w
                   (0.05, -0.85, L.TABLE_TOP_Z + JOB.thickness / 2), yaw=0.4)
 PARK = {"Plank0": (5.0, -5.0, 0.05), "Part0": (5.0, 5.0, 0.05), "Skeleton0": (5.5, 5.0, 0.05)}
 DATUM_GAP = 0.003
+# Recording angles: name -> (eye, look-at target), world frame.
+CAMERA_VIEWS = {
+    "overview": ((1.3, -2.6, 2.3), (0.3, -0.1, 0.85)),  # in front of the machine, gantry side-on
+    "cnc_closeup": ((0.30, 0.50, 1.55), (0.68, -0.30, 0.86)),  # from +Y: the gantry never passes in front
+    "robot_infeed": ((-1.55, -1.75, 1.65), (0.05, -0.35, 0.85)),
+    "top_down": ((0.2, -0.05, 4.0), (0.2, 0.0, 0.8)),
+}
 RENDER_EVERY = 8  # 120 Hz physics, 15 Hz rendering
 PERF_EVERY = 1200  # print a timing breakdown every 10 sim seconds
 assert JOB.fits(PLANK.length, PLANK.width, PLANK.thickness), "test plank too small for the job"
@@ -114,6 +126,54 @@ def cell_program(arm: ArmController, vac: Vacuum, cnc: CncRouter, scene: Interac
     print(f"[verify] skeleton in scrap bin: {in_bin} (at {np.round(skel, 3).tolist()})")
 
 
+class Recorder:
+    """One fixed camera per CAMERA_VIEWS entry, each streamed to its own H.264 MP4."""
+
+    def __init__(self, out_dir: str, fps: int, physics_dt: float) -> None:
+        from isaaclab.sensors import Camera, CameraCfg
+
+        self.out_dir, self.fps = out_dir, fps
+        self.every = max(1, round(1.0 / (fps * physics_dt)))  # physics steps per video frame
+        self.cams = {
+            name: Camera(CameraCfg(
+                prim_path=f"/World/RecCam_{name}",
+                update_period=0,
+                width=1280,
+                height=720,
+                data_types=["rgb"],
+                spawn=sim_utils.PinholeCameraCfg(
+                    focal_length=18.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.05, 100.0)
+                ),
+            ))
+            for name in CAMERA_VIEWS
+        }
+        self.writers = {}
+
+    def start(self) -> None:
+        """Aim the cameras and open the writers (after sim.reset())."""
+        import imageio
+
+        os.makedirs(self.out_dir, exist_ok=True)
+        for name, cam in self.cams.items():
+            eye, target = CAMERA_VIEWS[name]
+            cam.set_world_poses_from_view(torch.tensor([eye]), torch.tensor([target]))
+            path = os.path.join(self.out_dir, f"{args_cli.job}_{name}.mp4")
+            self.writers[name] = imageio.get_writer(path, fps=self.fps, codec="libx264", quality=7,
+                                                    macro_block_size=8, ffmpeg_log_level="error")
+
+    def capture(self, physics_dt: float) -> None:
+        for name, cam in self.cams.items():
+            cam.update(physics_dt * self.every)
+            frame = cam.data.output["rgb"][0]
+            frame = getattr(frame, "torch", frame)
+            self.writers[name].append_data(frame[..., :3].cpu().numpy().astype(np.uint8))
+
+    def close(self) -> None:
+        for name, w in self.writers.items():
+            w.close()
+            print(f"[record] wrote {os.path.join(self.out_dir, f'{args_cli.job}_{name}.mp4')}")
+
+
 def main() -> None:
     part_usd = build_part_usd(JOB)
     skel_usd = build_skeleton_usd(JOB, PLANK.length, PLANK.width, PLANK.thickness)
@@ -132,6 +192,7 @@ def main() -> None:
     add_wood_usd(cfg, "Part0", part_usd, part_mass, PARK["Part0"])
     add_wood_usd(cfg, "Skeleton0", skel_usd, skel_mass, PARK["Skeleton0"])
     scene = InteractiveScene(cfg)
+    recorder = Recorder(args_cli.record, args_cli.record_fps, sim.get_physics_dt()) if args_cli.record else None
     sim.reset()
     dt = sim.get_physics_dt()
 
@@ -150,10 +211,15 @@ def main() -> None:
     vac = Vacuum(scene, arm)
     cnc = CncRouter(scene, dt, effects=not args_cli.no_effects)
     prog = cell_program(arm, vac, cnc, scene)
+    if recorder is not None:
+        recorder.start()
+    render_every = recorder.every if recorder is not None else RENDER_EVERY
     wall0, steps = time.time(), 0
     cost = {"program": 0.0, "write": 0.0, "step": 0.0, "update": 0.0, "tick": 0.0}
     while simulation_app.is_running():
         steps += 1
+        if args_cli.stop_after is not None and steps * dt > args_cli.stop_after:
+            break
         if steps % PERF_EVERY == 0:
             wall = time.time() - wall0
             parts = ", ".join(f"{k} {1000 * v / PERF_EVERY:.1f}ms" for k, v in cost.items())
@@ -169,12 +235,17 @@ def main() -> None:
         t1 = time.time(); cost["program"] += t1 - t
         scene.write_data_to_sim()
         t2 = time.time(); cost["write"] += t2 - t1
-        sim.step(render=steps % RENDER_EVERY == 0)  # sim.step renders every call unless told not to
+        frame_step = steps % render_every == 0
+        sim.step(render=frame_step)  # sim.step renders every call unless told not to
         t3 = time.time(); cost["step"] += t3 - t2
         scene.update(dt)
         t4 = time.time(); cost["update"] += t4 - t3
-        cnc.tick()
+        cnc.tick(draw_every=render_every)
         cost["tick"] += time.time() - t4
+        if recorder is not None and frame_step:
+            recorder.capture(dt)
+    if recorder is not None:
+        recorder.close()
     print("[test] done")
 
 

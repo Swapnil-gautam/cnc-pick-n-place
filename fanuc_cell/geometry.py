@@ -16,8 +16,8 @@ from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, Vt
 from .assets import GENERATED_DIR
 from .jobs import TOOL_DIAMETER, Job, offset_outline, rounded_rect
 
-WOOD = (0.80, 0.62, 0.40)
-WOOD_CUT_EDGE = (0.62, 0.45, 0.27)  # routed edges read slightly darker
+WOOD = (0.66, 0.46, 0.26)  # pine, matches scene.PlankSpec.tint
+WOOD_CUT_EDGE = (0.48, 0.32, 0.17)  # routed edges read slightly darker
 HOLE = (0.10, 0.07, 0.04)
 
 
